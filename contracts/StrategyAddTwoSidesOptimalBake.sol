@@ -5,25 +5,25 @@ import "openzeppelin-solidity-2.3.0/contracts/utils/ReentrancyGuard.sol";
 import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
 import "@uniswap/v2-core/contracts/libraries/Math.sol";
-import "./uniswap/IUniswapV2Router02.sol";
+import "./bakeswap/IBakerySwapRouter.sol";
 import "./SafeToken.sol";
 import "./Strategy.sol";
 
-contract StrategyAddTwoSidesOptimal is Ownable, ReentrancyGuard, Strategy {
+contract StrategyAddTwoSidesOptimalBake is Ownable, ReentrancyGuard, Strategy {
     using SafeToken for address;
     using SafeMath for uint256;
 
     IUniswapV2Factory public factory;
-    IUniswapV2Router02 public router;
-    address public weth;
+    IBakerySwapRouter public router;
+    address public wbnb;
     address public goblin;
 
     /// @dev Create a new add two-side optimal strategy instance.
     /// @param _router The Uniswap router smart contract.
-    constructor(IUniswapV2Router02 _router, address _goblin) public {
+    constructor(IBakerySwapRouter _router, address _goblin) public {
         factory = IUniswapV2Factory(_router.factory());
         router = _router;
-        weth = _router.WETH();
+        wbnb = _router.WBNB();
         goblin = _goblin;
     }
     
@@ -71,10 +71,10 @@ contract StrategyAddTwoSidesOptimal is Ownable, ReentrancyGuard, Strategy {
     ) internal pure returns (uint256) {
         require(amtA.mul(resB) >= amtB.mul(resA), "Reversed");
 
-        uint256 a = 9975;
-        uint256 b = uint256(19975).mul(resA);
+        uint256 a = 997;
+        uint256 b = uint256(1997).mul(resA);
         uint256 _c = (amtA.mul(resB)).sub(amtB.mul(resA));
-        uint256 c = _c.mul(10000).div(amtB.add(resB)).mul(resA);
+        uint256 c = _c.mul(1000).div(amtB.add(resB)).mul(resA);
 
         uint256 d = a.mul(c).mul(4);
         uint256 e = Math.sqrt(b.mul(b).add(d));
@@ -96,7 +96,7 @@ contract StrategyAddTwoSidesOptimal is Ownable, ReentrancyGuard, Strategy {
     {
         // 1. Find out what farming token we are dealing with.
         (address fToken, uint256 fAmount, uint256 minLPAmount) = abi.decode(data, (address, uint256, uint256));
-        IUniswapV2Pair lpToken = IUniswapV2Pair(factory.getPair(fToken, weth));        
+        IUniswapV2Pair lpToken = IUniswapV2Pair(factory.getPair(fToken, wbnb));        
         // 2. Compute the optimal amount of ETH and fToken to be converted.  
         if (fAmount > 0) {  
             fToken.safeTransferFrom(user, address(this), fAmount);            
@@ -106,21 +106,21 @@ contract StrategyAddTwoSidesOptimal is Ownable, ReentrancyGuard, Strategy {
         bool isReversed;
         {
             (uint256 r0, uint256 r1, ) = lpToken.getReserves();
-            (uint256 ethReserve, uint256 fReserve) = lpToken.token0() == weth ? (r0, r1) : (r1, r0);
+            (uint256 ethReserve, uint256 fReserve) = lpToken.token0() == wbnb ? (r0, r1) : (r1, r0);
             (swapAmt, isReversed) = optimalDeposit(ethBalance, fToken.myBalance(), ethReserve, fReserve);
         }
         // 3. Convert between ETH and farming tokens
         fToken.safeApprove(address(router), 0);
         fToken.safeApprove(address(router), uint256(-1));
         address[] memory path = new address[](2);
-        (path[0], path[1]) = isReversed ? (fToken, weth) : (weth, fToken);
+        (path[0], path[1]) = isReversed ? (fToken, wbnb) : (wbnb, fToken);
         if (isReversed) {
-            router.swapExactTokensForETH(swapAmt, 0, path, address(this), now); // farming tokens to ETH
+            router.swapExactTokensForBNB(swapAmt, 0, path, address(this), now); // farming tokens to ETH
         } else {
-            router.swapExactETHForTokens.value(swapAmt)(0, path, address(this), now); // ETH to farming tokens
+            router.swapExactBNBForTokens.value(swapAmt)(0, path, address(this), now); // ETH to farming tokens
         }
         // 4. Mint more LP tokens and return all LP tokens to the sender.
-        (,, uint256 moreLPAmount) = router.addLiquidityETH.value(address(this).balance)(
+        (,, uint256 moreLPAmount) = router.addLiquidityBNB.value(address(this).balance)(
             fToken, fToken.myBalance(), 0, 0, address(this), now
         );
         require(moreLPAmount >= minLPAmount, "insufficient LP tokens received");

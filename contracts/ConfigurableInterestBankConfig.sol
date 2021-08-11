@@ -14,21 +14,21 @@ contract TripleSlopeModel {
     using SafeMath for uint256;
 
     /// @dev Return the interest rate per second, using 1e18 as denom.
-    function getInterestRate(uint256 debt, uint256 floating) external pure returns (uint256) {
-        uint256 total = debt.add(floating);
-        uint256 utilization = debt.mul(10000).div(total);
-        if (utilization < 5000) {
-            // Less than 50% utilization - 10% APY
-            return uint256(10e16) / 365 days;
-        } else if (utilization < 9500) {
-            // Between 50% and 95% - 10%-25% APY
-            return (10e16 + utilization.sub(5000).mul(15e16).div(10000)) / 365 days;
-        } else if (utilization < 10000) {
-            // Between 95% and 100% - 25%-100% APY
-            return (25e16 + utilization.sub(7500).mul(75e16).div(10000)) / 365 days;
+    function getInterestRate(uint debt, uint floating) external pure returns (uint) {
+        uint total = debt.add(floating);
+        uint utilization = total == 0 ? 0 : debt.mul(100e18).div(total);
+        if (utilization < 80e18) {
+        // Less than 80% utilization - 0%-20% APY
+        return utilization.mul(20e16).div(80e18) / 365 days;
+        } else if (utilization < 90e18) {
+        // Between 80% and 90% - 20% APY
+        return uint(20e16) / 365 days;
+        } else if (utilization < 100e18) {
+        // Between 90% and 100% - 20%-200% APY
+        return (20e16 + utilization.sub(90e18).mul(180e16).div(10e18)) / 365 days;
         } else {
-            // Not possible, but just in case - 100% APY
-            return uint256(100e16) / 365 days;
+        // Not possible, but just in case - 200% APY
+        return uint(200e16) / 365 days;
         }
     }
 }

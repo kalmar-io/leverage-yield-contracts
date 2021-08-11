@@ -23,6 +23,9 @@ contract Bank is ERC20, ReentrancyGuard, Ownable {
     string public symbol = "iBNB";
     uint8 public decimals = 18;
 
+    bool public killBpsToTreasury;
+    address public treasuryAddr;
+
     struct Position {
         address goblin;
         address owner;
@@ -56,8 +59,10 @@ contract Bank is ERC20, ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(BankConfig _config) public {
+    constructor(BankConfig _config,bool _killBpsToTreasury,address _treasuryAddr) public {
         config = _config;
+        killBpsToTreasury = _killBpsToTreasury;
+        treasuryAddr = _treasuryAddr;
         lastAccrueTime = now;
     }
 
@@ -105,6 +110,7 @@ contract Bank is ERC20, ReentrancyGuard, Ownable {
         uint256 total = totalETH().sub(msg.value);
         uint256 share = total == 0 ? msg.value : msg.value.mul(totalSupply()).div(total);
         _mint(msg.sender, share);
+        require(totalSupply() > 1e17, "no tiny shares");
     }
 
     /// @dev Withdraw ETH from the bank by burning the share tokens.
@@ -112,6 +118,7 @@ contract Bank is ERC20, ReentrancyGuard, Ownable {
         uint256 amount = share.mul(totalETH()).div(totalSupply());
         _burn(msg.sender, share);
         SafeToken.safeTransferETH(msg.sender, amount);
+        require(totalSupply() > 1e17, "no tiny shares");
     }
 
     /// @dev Create a new farming position to unlock your yield farming potential.
@@ -179,7 +186,10 @@ contract Bank is ERC20, ReentrancyGuard, Ownable {
         uint256 prize = back.mul(config.getKillBps()).div(10000);
         uint256 rest = back.sub(prize);
         // 3. Clear position debt and return funds to liquidator and position owner.
-        if (prize > 0) SafeToken.safeTransferETH(msg.sender, prize);
+        if (prize > 0) {
+            address rewardTo = killBpsToTreasury == true ? treasuryAddr : msg.sender;
+            SafeToken.safeTransferETH(rewardTo, prize);
+        }
         uint256 left = rest > debt ? rest - debt : 0;
         if (left > 0) SafeToken.safeTransferETH(pos.owner, left);
         emit Kill(id, msg.sender, prize, left);
@@ -229,6 +239,18 @@ contract Bank is ERC20, ReentrancyGuard, Ownable {
     /// @param value The number of ETH reserve to reduce.
     function reduceReserve(uint256 value) external onlyOwner {
         reservePool = reservePool.sub(value);
+    }
+
+    /// @dev Set Reward Kill Bps to owner or msg,sender
+    /// @param toTreasury bool set to owner or not
+    function setKillBpsToTreasury (bool toTreasury) external onlyOwner {
+        killBpsToTreasury = toTreasury;
+    }
+
+    /// @dev Set Treasury Address
+    /// @param _treasuryAddr treasury address 
+    function setTreasuryAddress (address _treasuryAddr) external onlyOwner {
+        treasuryAddr = _treasuryAddr;
     }
 
     /// @dev Recover ERC20 tokens that were accidentally sent to this smart contract.

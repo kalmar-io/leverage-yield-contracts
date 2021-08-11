@@ -6,15 +6,15 @@ import "openzeppelin-solidity-2.3.0/contracts/token/ERC20/IERC20.sol";
 import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
 import "@uniswap/v2-core/contracts/libraries/Math.sol";
-import "./uniswap/IUniswapV2Router02.sol";
+import "./bakeswap/IBakerySwapRouter.sol";
 import "./Strategy.sol";
 import "./SafeToken.sol";
 import "./Goblin.sol";
-import "./interfaces/IMasterChef.sol";
+import "./interfaces/IBakeMaster.sol";
 
 // MasterChefPoolRewardPairGoblin is specific for REWARDSTOKEN-BNB pool in Farm.
-// Such as, fToken = CAKE and pid = 1.
-contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
+// Such as, fToken = Bake and pid = 1.
+contract MasterChefPoolRewardPairGoblinBake is Ownable, ReentrancyGuard, Goblin {
     /// @notice Libraries
     using SafeToken for address;
     using SafeMath for uint256;
@@ -26,14 +26,13 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
     event Liquidate(uint256 indexed id, uint256 wad);
 
     /// @notice Immutable variables
-    IMasterChef public masterChef;
+    IBakeMaster public bakeMaster;
     IUniswapV2Factory public factory;
-    IUniswapV2Router02 public router;
+    IBakerySwapRouter public router;
     IUniswapV2Pair public lpToken;
-    address public weth;    
+    address public wbnb;   
     address public rewardToken;
     address public operator;
-    uint256 public constant pid = 251;
 
     /// @notice Mutable state variables
     mapping(uint256 => uint256) public shares;
@@ -47,22 +46,22 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
 
     constructor(
         address _operator,
-        IMasterChef _masterChef,
-        IUniswapV2Router02 _router,        
+        IBakeMaster _bakeMaster,
+        IBakerySwapRouter _router,        
         Strategy _addStrat,
         Strategy _liqStrat,
+        IERC20 _lpToken,
         uint256 _reinvestBountyBps,
         bool _reinvestToTreasury,
         address _treasuryAddr
     ) public {
         operator = _operator;
-        weth = _router.WETH();
-        masterChef = _masterChef;
+        wbnb = _router.WBNB();
+        bakeMaster = _bakeMaster;
         router = _router;
         factory = IUniswapV2Factory(_router.factory());                
-        (IERC20 _lpToken, , , ) = masterChef.poolInfo(pid);
         lpToken = IUniswapV2Pair(address(_lpToken));     
-        rewardToken = address(masterChef.cake());      
+        rewardToken = address(bakeMaster.bake());      
         addStrat = _addStrat;
         liqStrat = _liqStrat;
         okStrats[address(addStrat)] = true;
@@ -70,7 +69,7 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
         reinvestBountyBps = _reinvestBountyBps;
         reinvestToTreasury = _reinvestToTreasury;
         treasuryAddr = _treasuryAddr;
-        lpToken.approve(address(_masterChef), uint256(-1)); // 100% trust in the staking pool
+        lpToken.approve(address(_bakeMaster), uint256(-1)); // 100% trust in the staking pool
         lpToken.approve(address(router), uint256(-1)); // 100% trust in the router
         rewardToken.safeApprove(address(router), uint256(-1)); // 100% trust in the router        
     }
@@ -91,7 +90,7 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
     /// @param share The number of shares to be converted to LP balance.
     function shareToBalance(uint256 share) public view returns (uint256) {
         if (totalShare == 0) return share; // When there's no share, 1 share = 1 balance.
-        (uint256 totalBalance, ) = masterChef.userInfo(pid, address(this));
+        (uint256 totalBalance, ) = bakeMaster.poolUserInfoMap(address(lpToken), address(this));
         return share.mul(totalBalance).div(totalShare);
     }
 
@@ -99,14 +98,14 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
     /// @param balance the number of LP tokens to be converted to shares.
     function balanceToShare(uint256 balance) public view returns (uint256) {
         if (totalShare == 0) return balance; // When there's no share, 1 share = 1 balance.
-        (uint256 totalBalance, ) = masterChef.userInfo(pid, address(this));
+        (uint256 totalBalance, ) = bakeMaster.poolUserInfoMap(address(lpToken), address(this));
         return balance.mul(totalShare).div(totalBalance);
     }
 
     /// @dev Re-invest whatever this worker has earned back to staked LP tokens.
     function reinvest() public onlyEOA nonReentrant {
         // 1. Withdraw all the rewards.        
-        masterChef.withdraw(pid, 0);
+        bakeMaster.withdraw(address(lpToken), 0);
         uint256 reward = rewardToken.balanceOf(address(this));        
         if (reward == 0) return;
         // 2. Send the reward bounty to the caller or Owner.
@@ -120,7 +119,7 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
         rewardToken.safeTransfer(address(addStrat), reward.sub(bounty));
         addStrat.execute(address(this), 0, abi.encode(rewardToken, 0, 0));
         // 4. Mint more LP tokens and stake them for more rewards.
-        masterChef.deposit(pid, lpToken.balanceOf(address(this)));
+        bakeMaster.deposit(address(lpToken), lpToken.balanceOf(address(this)));
         emit Reinvest(msg.sender, reward, bounty);
     }
 
@@ -153,9 +152,9 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
     function getMktSellAmount(uint256 aIn, uint256 rIn, uint256 rOut) public pure returns (uint256) {
         if (aIn == 0) return 0;
         require(rIn > 0 && rOut > 0, "bad reserve values");
-        uint256 aInWithFee = aIn.mul(9975);
+        uint256 aInWithFee = aIn.mul(997);
         uint256 numerator = aInWithFee.mul(rOut);
-        uint256 denominator = rIn.mul(10000).add(aInWithFee);
+        uint256 denominator = rIn.mul(1000).add(aInWithFee);
         return numerator / denominator;
     }
 
@@ -167,7 +166,7 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
         uint256 lpSupply = lpToken.totalSupply(); // Ignore pending mintFee as it is insignificant
         // 2. Get the pool's total supply of WETH and farming token.
         (uint256 r0, uint256 r1,) = lpToken.getReserves();
-        (uint256 totalWETH, uint256 totalSushi) = lpToken.token0() == weth ? (r0, r1) : (r1, r0);
+        (uint256 totalWETH, uint256 totalSushi) = lpToken.token0() == wbnb ? (r0, r1) : (r1, r0);
         // 3. Convert the position's LP tokens to the underlying assets.
         uint256 userWETH = lpBalance.mul(totalWETH).div(lpSupply);
         uint256 userSushi = lpBalance.mul(totalSushi).div(lpSupply);
@@ -196,7 +195,7 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
 
         if (balance > 0) {
             uint256 share = balanceToShare(balance);
-            masterChef.deposit(pid, balance);
+            bakeMaster.deposit(address(lpToken), balance);
             shares[id] = shares[id].add(share);
             totalShare = totalShare.add(share);
             emit AddShare(id, share);
@@ -208,7 +207,7 @@ contract MasterChefPoolRewardPairGoblin is Ownable, ReentrancyGuard, Goblin {
         uint256 share = shares[id];
         if (share > 0) {
             uint256 balance = shareToBalance(share);
-            masterChef.withdraw(pid, balance);
+            bakeMaster.withdraw(address(lpToken), balance);
             totalShare = totalShare.sub(share);
             shares[id] = 0;
             emit RemoveShare(id, share);

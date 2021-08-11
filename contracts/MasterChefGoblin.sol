@@ -41,6 +41,8 @@ contract MasterChefGoblin is Ownable, ReentrancyGuard, Goblin {
     Strategy public addStrat;
     Strategy public liqStrat;
     uint256 public reinvestBountyBps;
+    bool public reinvestToTreasury;
+    address public treasuryAddr;
 
     constructor(
         address _operator,
@@ -49,7 +51,9 @@ contract MasterChefGoblin is Ownable, ReentrancyGuard, Goblin {
         uint256 _pid,        
         Strategy _addStrat,
         Strategy _liqStrat,
-        uint256 _reinvestBountyBps
+        uint256 _reinvestBountyBps,
+        bool _reinvestToTreasury,
+        address _treasuryAddr
     ) public {
         operator = _operator;
         weth = _router.WETH();
@@ -69,6 +73,8 @@ contract MasterChefGoblin is Ownable, ReentrancyGuard, Goblin {
         okStrats[address(addStrat)] = true;
         okStrats[address(liqStrat)] = true;
         reinvestBountyBps = _reinvestBountyBps;
+        reinvestToTreasury = _reinvestToTreasury;
+        treasuryAddr = _treasuryAddr;
         lpToken.approve(address(_masterChef), uint256(-1)); // 100% trust in the staking pool
         lpToken.approve(address(router), uint256(-1)); // 100% trust in the router
         fToken.safeApprove(address(router), uint256(-1)); // 100% trust in the router
@@ -109,9 +115,12 @@ contract MasterChefGoblin is Ownable, ReentrancyGuard, Goblin {
         masterChef.withdraw(pid, 0);
         uint256 reward = rewardToken.balanceOf(address(this));
         if (reward == 0) return;
-        // 2. Send the reward bounty to the caller.
+        // 2. Send the reward bounty to the caller or Owner.
         uint256 bounty = reward.mul(reinvestBountyBps) / 10000;
-        rewardToken.safeTransfer(msg.sender, bounty);
+
+        address rewardTo = reinvestToTreasury == true ? treasuryAddr : msg.sender;
+
+        rewardToken.safeTransfer(rewardTo, bounty);
         // 3. Convert all the remaining rewards to ETH.
         address[] memory path = new address[](2);
         path[0] = address(rewardToken);
@@ -153,9 +162,9 @@ contract MasterChefGoblin is Ownable, ReentrancyGuard, Goblin {
     function getMktSellAmount(uint256 aIn, uint256 rIn, uint256 rOut) public pure returns (uint256) {
         if (aIn == 0) return 0;
         require(rIn > 0 && rOut > 0, "bad reserve values");
-        uint256 aInWithFee = aIn.mul(997);
+        uint256 aInWithFee = aIn.mul(9975);
         uint256 numerator = aInWithFee.mul(rOut);
-        uint256 denominator = rIn.mul(1000).add(aInWithFee);
+        uint256 denominator = rIn.mul(10000).add(aInWithFee);
         return numerator / denominator;
     }
 
@@ -236,6 +245,19 @@ contract MasterChefGoblin is Ownable, ReentrancyGuard, Goblin {
         for (uint256 idx = 0; idx < len; idx++) {
             okStrats[strats[idx]] = isOk;
         }
+    }
+
+    /// @dev Set Reward Reinvest Reward to owner or msg,sender
+    /// @param toTreasury bool set to treasury or not
+    function setReinvestToTreasury (bool toTreasury) external onlyOwner {
+        reinvestToTreasury = toTreasury;
+    }
+
+
+    /// @dev Set Treasury Address
+    /// @param _treasuryAddr treasury address 
+    function setTreasuryAddress (address _treasuryAddr) external onlyOwner {
+        treasuryAddr = _treasuryAddr;
     }
 
     /// @dev Update critical strategy smart contracts. EMERGENCY ONLY. Bad strategies can steal funds.
